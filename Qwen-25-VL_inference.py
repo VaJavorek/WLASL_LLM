@@ -35,14 +35,17 @@ def predict_gloss(video_path, fps=4):
     """Predict gloss from an ASL video using Qwen model."""
     
     system_content = (
-        "You are a helpful assistant that annotates ASL videos with English gloss. "
+        "You are an expert ASL (American Sign Language) gloss annotator. Your task is to watch ASL videos and predict the EXACT single English gloss that represents the sign being performed."
         "Provide the gloss of the sign language video, output only the gloss, no other text."
+        "Do NOT output phrases like 'woman signing' or 'hand movements' or descriptions."
+        "Examples of correct ASL glosses: BOOK, RUN, HAPPY, WATER, SCHOOL, COMPUTER, DANCE, etc."
     )
     # Prepare messages with video and fps
     messages = [
         {"role": "system", "content": system_content},
         {"role": "user", "content": [
-            {"type": "video", "video": f"file://{video_path}", "fps": fps}
+            {"type": "video", "video": f"file://{video_path}", "fps": fps},
+            {"type": "text", "text": "What is the ASL gloss for this sign? Output only the single English word or phrase."}
         ]}
     ]
 
