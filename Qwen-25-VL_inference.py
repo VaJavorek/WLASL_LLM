@@ -134,7 +134,7 @@ def process_dataset(json_file_path, videos_path, output_dir):
     
     # Initialize CSV file
     with open(csv_file_path, 'w', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ['ground_truth_gloss', 'gloss_id', 'video_id', 'predicted_gloss', 'processing_time']
+        fieldnames = ['ground_truth_gloss', 'gloss_id', 'video_id', 'predicted_gloss', 'video_fps', 'processing_time']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         
@@ -149,13 +149,15 @@ def process_dataset(json_file_path, videos_path, output_dir):
                 print(f"Processing video {i+1}/{len(test_videos)}: {video_info['video_id']} - {video_info['ground_truth_gloss']}")
                 
                 # Use FPS from the video metadata, but cap it at reasonable value for processing
-                video_fps = min(video_info['fps'], 8)  # Cap at 8 FPS for efficiency
+                video_fps = min(video_info['fps'], 4)
                 
                 # Predict gloss using Qwen
                 predicted_gloss = predict_gloss(video_info['video_path'], fps=video_fps)
                 
-                # Clean up the predicted gloss (remove extra whitespace, etc.)
-                predicted_gloss = predicted_gloss.strip()
+                # Clean up the predicted gloss (remove extra whitespace, newlines, etc.)
+                predicted_gloss = predicted_gloss.strip().replace('\n', ' ').replace('\r', ' ')
+                # Also remove multiple consecutive spaces
+                predicted_gloss = ' '.join(predicted_gloss.split())
                 
                 processing_time = (datetime.now() - start_time).total_seconds()
                 
@@ -165,6 +167,7 @@ def process_dataset(json_file_path, videos_path, output_dir):
                     'gloss_id': video_info['gloss_id'],
                     'video_id': video_info['video_id'],
                     'predicted_gloss': predicted_gloss,
+                    'video_fps': video_fps,
                     'processing_time': processing_time
                 })
                 
@@ -190,6 +193,7 @@ def process_dataset(json_file_path, videos_path, output_dir):
                     'gloss_id': video_info['gloss_id'],
                     'video_id': video_info['video_id'],
                     'predicted_gloss': f"ERROR: {str(e)}",
+                    'video_fps': video_fps,
                     'processing_time': 0
                 })
             
