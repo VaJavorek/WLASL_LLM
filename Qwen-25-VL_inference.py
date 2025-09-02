@@ -11,9 +11,9 @@ from datetime import datetime
 # Configuration
 local_path = "models/Qwen2.5-VL-7B-Instruct"
 model_name = "Qwen/Qwen2.5-VL-7B-Instruct"
-videos_path = "/auto/plzen1/home/javorek/WLASL_LLM/data/WLASL300/test"
-json_file_path = "/auto/plzen1/home/javorek/WLASL_LLM/data/WLASL300/WLASL_v0.3.json"
-output_dir = "/auto/plzen1/home/javorek/WLASL_LLM/output/"
+videos_path = "/auto/plzen4-ntis/projects/korpusy_cv/WLASL/WLASL300/test"
+json_file_path = "/auto/plzen4-ntis/projects/korpusy_cv/WLASL/WLASL300/WLASL_v0.3.json"
+output_dir = "output/"
 min_pixels = 256 * 40 * 40
 max_pixels = 1080 * 40 * 40
 
