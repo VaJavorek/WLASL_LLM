@@ -176,7 +176,7 @@ def process_dataset(json_file_path, videos_path, output_dir):
                 })
                 
                 # Write to log file
-                log_message = f"{datetime.now().isoformat()} - SUCCESS - Video: {video_info['video_id']} - GT: {video_info['ground_truth_gloss']} - Predicted: {predicted_gloss} - Time: {processing_time:.2f}s\n"
+                log_message = f"{datetime.now().isoformat()} - MODEL: {model_name} - SUCCESS - Video: {video_info['video_id']} - GT: {video_info['ground_truth_gloss']} - Predicted: {predicted_gloss} - Time: {processing_time:.2f}s\n"
                 with open(log_file_path, 'a', encoding='utf-8') as logfile:
                     logfile.write(log_message)
                 
@@ -184,7 +184,7 @@ def process_dataset(json_file_path, videos_path, output_dir):
                 print(f"  → Predicted: '{predicted_gloss}' (took {processing_time:.2f}s)")
                 
             except Exception as e:
-                error_message = f"{datetime.now().isoformat()} - ERROR - Video: {video_info['video_id']} - GT: {video_info['ground_truth_gloss']} - Error: {str(e)}\n"
+                error_message = f"{datetime.now().isoformat()} - MODEL: {model_name} - ERROR - Video: {video_info['video_id']} - GT: {video_info['ground_truth_gloss']} - Error: {str(e)}\n"
                 with open(log_file_path, 'a', encoding='utf-8') as logfile:
                     logfile.write(error_message)
                 
@@ -209,6 +209,7 @@ def process_dataset(json_file_path, videos_path, output_dir):
     # Final summary
     summary_message = f"""
 === PROCESSING COMPLETE ===
+Model: {model_name}
 Total videos: {len(test_videos)}
 Successfully processed: {processed_count}
 Errors: {errors_count}
