@@ -1,4 +1,4 @@
-from transformers import Qwen3VLMoeForConditionalGeneration, AutoProcessor
+from transformers import AutoModelForCausalLM, AutoProcessor
 from qwen_vl_utils import process_vision_info
 import torch
 import os
@@ -18,7 +18,7 @@ min_pixels = 256 * 40 * 40
 max_pixels = 1080 * 40 * 40
 
 # Load model and processor
-model = Qwen3VLMoeForConditionalGeneration.from_pretrained(
+model = AutoModelForCausalLM.from_pretrained(
     local_path,
     torch_dtype=torch.bfloat16,
     attn_implementation="flash_attention_2",
