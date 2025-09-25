@@ -1,4 +1,4 @@
-from transformers import AutoModelForCausalLM, AutoProcessor
+from transformers import AutoModelForVision2Seq, AutoProcessor
 from qwen_vl_utils import process_vision_info
 import torch
 import os
@@ -18,15 +18,16 @@ min_pixels = 256 * 40 * 40
 max_pixels = 1080 * 40 * 40
 
 # Load model and processor
-model = AutoModelForCausalLM.from_pretrained(
+model = AutoModelForVision2Seq.from_pretrained(
     local_path,
-    torch_dtype=torch.bfloat16,
+    dtype=torch.bfloat16,
     attn_implementation="flash_attention_2",
     device_map="auto",
+    trust_remote_code=True,
 )
 
 processor = AutoProcessor.from_pretrained(
-    model_name, min_pixels=min_pixels, max_pixels=max_pixels
+    model_name, min_pixels=min_pixels, max_pixels=max_pixels, trust_remote_code=True
 )
 
 
