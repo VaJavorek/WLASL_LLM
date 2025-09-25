@@ -1,5 +1,6 @@
-from transformers import AutoModelForVision2Seq, AutoProcessor
-from qwen_vl_utils import process_vision_info
+from transformers import Qwen3OmniMoeForConditionalGeneration, Qwen3OmniMoeProcessor
+from qwen_omni_utils import process_mm_info
+# from qwen_vl_utils import process_vision_info
 import torch
 import os
 import json
@@ -18,15 +19,15 @@ min_pixels = 256 * 40 * 40
 max_pixels = 1080 * 40 * 40
 
 # Load model and processor
-model = AutoModelForVision2Seq.from_pretrained(
+model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
     local_path,
-    dtype=torch.bfloat16,
+    dtype="auto",
     attn_implementation="flash_attention_2",
     device_map="auto",
     trust_remote_code=True,
 )
 
-processor = AutoProcessor.from_pretrained(
+processor = Qwen3OmniMoeProcessor.from_pretrained(
     model_name, min_pixels=min_pixels, max_pixels=max_pixels, trust_remote_code=True
 )
 
@@ -52,19 +53,51 @@ def predict_gloss(video_path, fps=4):
 
     # Apply chat template and process vision inputs
     text = processor.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
+    messages, tokenize=False, add_generation_prompt=True
     )
-    image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True)
+    # Process multimodal inputs (images, audios, videos) and optional processor kwargs.
+    # For video-to-text only: explicitly disable audio usage in video if supported.
+    # Support both older and newer qwen_omni_utils APIs by handling multiple return shapes.
+    try:
+        mm_result = process_mm_info(messages, use_audio_in_video=False)
+    except TypeError:
+        # Older API without the parameter
+        mm_result = process_mm_info(messages)
+    if isinstance(mm_result, tuple):
+        if len(mm_result) == 4:
+            image_inputs, audio_inputs, video_inputs, mm_kwargs = mm_result
+        elif len(mm_result) == 3:
+            image_inputs, audio_inputs, video_inputs = mm_result
+            mm_kwargs = {}
+        else:
+            raise RuntimeError(
+                "process_mm_info() returned an unexpected tuple length. Expected 3 or 4 values."
+            )
+    elif isinstance(mm_result, dict):
+        image_inputs = mm_result.get("image_inputs") or mm_result.get("images")
+        audio_inputs = mm_result.get("audio_inputs") or mm_result.get("audios")
+        video_inputs = mm_result.get("video_inputs") or mm_result.get("videos")
+        mm_kwargs = mm_result.get("mm_kwargs", {})
+    else:
+        raise RuntimeError(
+            "process_mm_info() returned an unsupported type. Expected tuple or dict."
+        )
 
-    # Prepare model inputs
-    inputs = processor(
-        text=[text],
-        images=image_inputs,
-        videos=video_inputs,
-        padding=True,
-        return_tensors="pt",
-        **video_kwargs,  # Include video-specific kwargs
-    )
+    # Prepare model inputs (omit None modalities to avoid processor errors)
+    processor_inputs = {
+        "text": [text],
+        "padding": True,
+        "return_tensors": "pt",
+        **mm_kwargs,
+    }
+    if image_inputs is not None:
+        processor_inputs["images"] = image_inputs
+    if video_inputs is not None:
+        processor_inputs["videos"] = video_inputs
+    if audio_inputs is not None and (not hasattr(audio_inputs, "__len__") or len(audio_inputs) > 0):
+        processor_inputs["audios"] = audio_inputs
+
+    inputs = processor(**processor_inputs)
     inputs = inputs.to("cuda")
 
     # Generate response
