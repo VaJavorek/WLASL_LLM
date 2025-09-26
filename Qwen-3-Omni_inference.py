@@ -2,6 +2,7 @@ from transformers import Qwen3OmniMoeForConditionalGeneration, Qwen3OmniMoeProce
 from qwen_omni_utils import process_mm_info
 # from qwen_vl_utils import process_vision_info
 import torch
+import gc
 import os
 import json
 import random
@@ -18,12 +19,17 @@ output_dir = "output/"
 min_pixels = 256 * 40 * 40
 max_pixels = 1080 * 40 * 40
 
-# Load model and processor
+# Memory allocator tweaks to reduce fragmentation and allow expandable segments
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True,max_split_size_mb:128")
+os.environ.setdefault("TORCH_SHOW_CPP_STACKTRACES", "1")
+
+# Load model and processor with offload-friendly settings
 model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
     local_path,
     dtype="auto",
     attn_implementation="flash_attention_2",
-    device_map="auto",
+    device_map="auto",  # Let HF shard across GPU/CPU if needed
+    low_cpu_mem_usage=True,
     trust_remote_code=True,
 )
 
@@ -98,10 +104,16 @@ def predict_gloss(video_path, fps=4):
         processor_inputs["audios"] = audio_inputs
 
     inputs = processor(**processor_inputs)
-    inputs = inputs.to("cuda")
 
     # Generate response
-    generated_ids = model.generate(**inputs, max_new_tokens=512, temperature=0.1)
+    # Use inference_mode to cut autograd overhead and reduce memory
+    with torch.inference_mode():
+        generated_ids = model.generate(
+            **inputs,
+            max_new_tokens=64,
+            do_sample=False,
+            temperature=0.0,
+        )
     # Trim prompt tokens and decode
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
@@ -109,6 +121,11 @@ def predict_gloss(video_path, fps=4):
     output_text = processor.batch_decode(
         generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
     )
+
+    # Best-effort memory cleanup per call
+    del inputs, generated_ids, generated_ids_trimmed
+    torch.cuda.empty_cache()
+    gc.collect()
 
     return output_text[0] if output_text else ""
 
