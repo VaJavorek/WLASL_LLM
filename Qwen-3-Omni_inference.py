@@ -53,7 +53,7 @@ model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
     low_cpu_mem_usage=True,
     offload_folder="offload",
     max_memory={
-        "cuda:0": "40GiB",
+        "0": "40GiB",
         "cpu": "230GiB",
     },
     quantization_config=bnb_config,
