@@ -1,13 +1,7 @@
 from transformers import Qwen3OmniMoeForConditionalGeneration, Qwen3OmniMoeProcessor
-try:
-    from transformers import BitsAndBytesConfig
-    _HAS_BNB = True
-except Exception:
-    _HAS_BNB = False
 from qwen_omni_utils import process_mm_info
 # from qwen_vl_utils import process_vision_info
 import torch
-import gc
 import os
 import json
 import random
@@ -16,50 +10,22 @@ import re
 from datetime import datetime
 
 # Configuration
-TARGET_FPS = 4
 local_path = "models/Qwen3-Omni-30B-A3B-Instruct"
 model_name = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
 videos_path = "/auto/plzen4-ntis/projects/korpusy_cv/WLASL/WLASL300/test"
 json_file_path = "/auto/plzen4-ntis/projects/korpusy_cv/WLASL/WLASL300/WLASL_v0.3.json"
 output_dir = "output/"
 min_pixels = 256 * 40 * 40
-# Reduce max pixels to lower video token count and VRAM usage
-max_pixels = 720 * 40 * 40
+max_pixels = 1080 * 40 * 40
 
-# Memory allocator tweaks to reduce fragmentation and allow expandable segments
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True,max_split_size_mb:128")
-os.environ.setdefault("TORCH_SHOW_CPP_STACKTRACES", "1")
-os.makedirs("offload", exist_ok=True)
-
-# Optional 4-bit quantization if bitsandbytes is available
-bnb_config = None
-if _HAS_BNB:
-    try:
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-        )
-    except Exception:
-        bnb_config = None
-
-# Load model and processor with offload-friendly settings
+# Load model and processor
 model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
     local_path,
-    torch_dtype=torch.bfloat16,
-    attn_implementation="sdpa",
-    device_map="auto",  # Let HF shard across GPU/CPU if needed
-    low_cpu_mem_usage=True,
-    offload_folder="offload",
-    max_memory={
-        "0": "40GiB",
-        "cpu": "230GiB",
-    },
-    quantization_config=bnb_config,
+    dtype="auto",
+    attn_implementation="flash_attention_2",
+    device_map="auto",
     trust_remote_code=True,
 )
-model.eval()
 
 processor = Qwen3OmniMoeProcessor.from_pretrained(
     model_name, min_pixels=min_pixels, max_pixels=max_pixels, trust_remote_code=True
@@ -132,17 +98,10 @@ def predict_gloss(video_path, fps=4):
         processor_inputs["audios"] = audio_inputs
 
     inputs = processor(**processor_inputs)
+    inputs = inputs.to("cuda")
 
     # Generate response
-    # Use inference_mode to cut autograd overhead and reduce memory
-    with torch.inference_mode():
-        generated_ids = model.generate(
-            **inputs,
-            max_new_tokens=8,
-            do_sample=False,
-            temperature=0.0,
-            use_cache=False,
-        )
+    generated_ids = model.generate(**inputs, max_new_tokens=512, temperature=0.1)
     # Trim prompt tokens and decode
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
@@ -150,11 +109,6 @@ def predict_gloss(video_path, fps=4):
     output_text = processor.batch_decode(
         generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
     )
-
-    # Best-effort memory cleanup per call
-    del inputs, generated_ids, generated_ids_trimmed
-    torch.cuda.empty_cache()
-    gc.collect()
 
     return output_text[0] if output_text else ""
 
@@ -231,8 +185,8 @@ def process_dataset(json_file_path, videos_path, output_dir):
             try:
                 print(f"Processing video {i+1}/{len(test_videos)}: {video_info['video_id']} - {video_info['ground_truth_gloss']}")
                 
-                # Cap FPS to reduce number of video frames processed
-                video_fps = min(video_info['fps'], TARGET_FPS)
+                # Use FPS from the video metadata, but cap it at reasonable value for processing
+                video_fps = min(video_info['fps'], 25)
                 
                 # Predict gloss using Qwen3-Omni
                 predicted_gloss = predict_gloss(video_info['video_path'], fps=video_fps)
@@ -307,5 +261,3 @@ if __name__ == "__main__":
     print(f"Start date and time = {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
     process_dataset(json_file_path, videos_path, output_dir)
     print(f"End date and time = {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
-
-
