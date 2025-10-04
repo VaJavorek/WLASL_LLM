@@ -10,8 +10,8 @@ from datetime import datetime
 
 # Configuration
 # local_path = "models/Qwen3-VL-235B-A22B-Instruct"
-local_path = "models/Qwen3-VL-235B-A22B-Instruct-AWQ"
-model_name = "Qwen/Qwen3-VL-235B-A22B-Instruct"
+local_path = "models/Qwen3-VL-30B-A3B-Instruct"
+model_name = "Qwen/Qwen3-VL-30B-A3B-Instruct"
 logged_model_name = re.sub(r'^[\\/]*models[\\/]+', '', local_path)
 videos_path = "/auto/plzen4-ntis/projects/korpusy_cv/WLASL/WLASL300/test"
 json_file_path = "/auto/plzen4-ntis/projects/korpusy_cv/WLASL/WLASL300/WLASL_v0.3.json"
