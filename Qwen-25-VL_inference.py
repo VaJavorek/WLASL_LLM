@@ -88,7 +88,7 @@ def process_dataset(json_file_path, videos_path, output_dir):
     # Generate timestamp for unique filenames
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     csv_file_path = os.path.join(output_dir, f"wlasl_predictions_{timestamp}.csv")
-    log_file_path = os.path.join(output_dir, f"wlasl_processing_{timestamp}.log")
+    log_file_path = os.path.join(output_dir, f"wlasl_processing_{logged_model_name}_{timestamp}.log")
     
     # Load JSON data
     print("Loading WLASL JSON data...")
