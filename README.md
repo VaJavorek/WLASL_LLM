@@ -14,4 +14,5 @@ pip install accelerate safetensors pillow
 pip install qwen-vl-utils
 pip install qwen-omni-utils
 pip install flash-attn --no-build-isolation
+pip install decord
 ```
