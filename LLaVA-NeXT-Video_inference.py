@@ -1,5 +1,4 @@
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
-from qwen_vl_utils import process_vision_info
+from transformers import LlavaNextVideoProcessor, LlavaNextVideoForConditionalGeneration
 import torch
 import os
 import json
@@ -7,77 +6,134 @@ import random
 import csv
 import re
 from datetime import datetime
+import av
+import numpy as np
 
 # Configuration
-local_path = "models/Qwen2.5-VL-7B-Instruct"
-model_name = "Qwen/Qwen2.5-VL-7B-Instruct"
-logged_model_name = re.sub(r'^[\\/]*models[\\/]+', '', local_path)
+# Options: "llava-hf/LLaVA-NeXT-Video-7B-hf", "llava-hf/LLaVA-NeXT-Video-34B-hf", "llava-hf/LLaVA-NeXT-Video-7B-DPO-hf"
+model_name = "llava-hf/LLaVA-NeXT-Video-7B-hf"
+local_path = "models/LLaVA-NeXT-Video-7B-hf"  # Optional: use local path if model is downloaded
+use_local = True  # Set to True if using local model path
+
+logged_model_name = model_name.split('/')[-1] if not use_local else re.sub(r'^[\\/]*models[\\/]+', '', local_path)
 videos_path = "/auto/plzen4-ntis/projects/korpusy_cv/WLASL/WLASL300/test"
 json_file_path = "/auto/plzen4-ntis/projects/korpusy_cv/WLASL/WLASL300/WLASL_v0.3.json"
 output_dir = "output/"
-min_pixels = 256 * 40 * 40
-max_pixels = 1080 * 40 * 40
 
 # Load model and processor
-model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-    local_path,
-    torch_dtype=torch.bfloat16,
-    attn_implementation="flash_attention_2",
+print(f"Loading {model_name} model...")
+model_path = local_path if use_local else model_name
+
+model = LlavaNextVideoForConditionalGeneration.from_pretrained(
+    model_path,
+    torch_dtype=torch.float16,
     device_map="auto",
+    trust_remote_code=True,
 )
 
-processor = AutoProcessor.from_pretrained(
-    model_name, min_pixels=min_pixels, max_pixels=max_pixels
+processor = LlavaNextVideoProcessor.from_pretrained(
+    model_path,
+    trust_remote_code=True
 )
 
+print("Model loaded successfully!")
 
 
-def predict_gloss(video_path, fps=4):
-    """Predict gloss from an ASL video using Qwen model."""
+def read_video_pyav(video_path, num_frames=8):
+    """
+    Read video frames using PyAV library.
     
-    system_content = (
-        "You are an expert ASL (American Sign Language) gloss annotator. Your task is to watch ASL videos and predict the EXACT single English gloss that represents the sign being performed."
-        "Provide the gloss of the sign language video, output only the gloss, no other text."
-        "Do NOT output phrases like 'woman signing' or 'hand movements' or descriptions."
-        "Examples of correct ASL glosses: BOOK, RUN, HAPPY, WATER, SCHOOL, COMPUTER, DANCE, etc."
-    )
-    # Prepare messages with video and fps
-    messages = [
-        {"role": "system", "content": system_content},
-        {"role": "user", "content": [
-            {"type": "video", "video": f"file://{video_path}", "fps": fps},
-            {"type": "text", "text": "What is the ASL gloss for this sign? Output only the single English word or phrase."}
-        ]}
+    Args:
+        video_path: Path to video file
+        num_frames: Number of frames to extract evenly from the video
+    
+    Returns:
+        List of numpy arrays representing frames
+    """
+    container = av.open(video_path)
+    
+    # Get total number of frames
+    total_frames = container.streams.video[0].frames
+    if total_frames == 0:
+        # If frames count is not available, count manually
+        total_frames = sum(1 for _ in container.decode(video=0))
+        container.close()
+        container = av.open(video_path)
+    
+    # Calculate indices for evenly spaced frames
+    if total_frames < num_frames:
+        indices = list(range(total_frames))
+    else:
+        indices = np.linspace(0, total_frames - 1, num_frames, dtype=int)
+    
+    frames = []
+    video_stream = container.streams.video[0]
+    
+    for i, frame in enumerate(container.decode(video_stream)):
+        if i in indices:
+            # Convert frame to numpy array
+            img = frame.to_ndarray(format="rgb24")
+            frames.append(img)
+        
+        if len(frames) >= num_frames:
+            break
+    
+    container.close()
+    
+    return frames
+
+
+def predict_gloss(video_path, num_frames=8):
+    """Predict gloss from an ASL video using LLaVA-NeXT-Video model."""
+    
+    # Read video frames
+    video_frames = read_video_pyav(video_path, num_frames=num_frames)
+    
+    if len(video_frames) == 0:
+        raise ValueError(f"Could not extract frames from video: {video_path}")
+    
+    # Prepare the conversation with system-like instruction and user query
+    conversation = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "video"},
+                {"type": "text", "text": "You are an expert ASL (American Sign Language) gloss annotator. Watch this ASL video carefully and identify the single English word or phrase (gloss) that represents the sign being performed. Examples of correct ASL glosses: BOOK, RUN, HAPPY, WATER, SCHOOL, COMPUTER, DANCE, etc. What is the ASL gloss for this sign? Output only the single English word or phrase, no other text or description."},
+            ],
+        },
     ]
-
-    # Apply chat template and process vision inputs
-    text = processor.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
-    image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True)
-
-    # Prepare model inputs
+    
+    # Apply chat template
+    prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+    
+    # Process inputs
     inputs = processor(
-        text=[text],
-        images=image_inputs,
-        videos=video_inputs,
-        padding=True,
-        return_tensors="pt",
-        **video_kwargs,  # Include video-specific kwargs
-    )
-    inputs = inputs.to("cuda")
-
+        text=prompt,
+        videos=video_frames,
+        return_tensors="pt"
+    ).to(model.device)
+    
     # Generate response
-    generated_ids = model.generate(**inputs, max_new_tokens=2048, temperature=1)
-    # Trim prompt tokens and decode
+    with torch.no_grad():
+        generated_ids = model.generate(
+            **inputs,
+            max_new_tokens=100,
+            do_sample=False,  # Use greedy decoding for consistency
+        )
+    
+    # Decode the generated text
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
     ]
+    
     output_text = processor.batch_decode(
-        generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+        generated_ids_trimmed,
+        skip_special_tokens=True,
+        clean_up_tokenization_spaces=False
     )
-
+    
     return output_text[0] if output_text else ""
+
 
 def process_dataset(json_file_path, videos_path, output_dir):
     """Process a dataset of videos and save results to CSV and log files."""
@@ -138,7 +194,7 @@ def process_dataset(json_file_path, videos_path, output_dir):
     
     # Initialize CSV file
     with open(csv_file_path, 'w', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ['ground_truth_gloss', 'gloss_id', 'video_id', 'predicted_gloss', 'video_fps', 'processing_time']
+        fieldnames = ['ground_truth_gloss', 'gloss_id', 'video_id', 'predicted_gloss', 'num_frames', 'processing_time']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         
@@ -152,11 +208,11 @@ def process_dataset(json_file_path, videos_path, output_dir):
             try:
                 print(f"Processing video {i+1}/{len(test_videos)}: {video_info['video_id']} - {video_info['ground_truth_gloss']}")
                 
-                # Use FPS from the video metadata, but cap it at reasonable value for processing
-                video_fps = min(video_info['fps'], 4)
+                # Use 8 frames for video processing
+                num_frames = 8
                 
-                # Predict gloss using Qwen
-                predicted_gloss = predict_gloss(video_info['video_path'], fps=video_fps)
+                # Predict gloss using LLaVA-NeXT-Video
+                predicted_gloss = predict_gloss(video_info['video_path'], num_frames=num_frames)
                 
                 # Clean up the predicted gloss (remove extra whitespace, newlines, etc.)
                 predicted_gloss = predicted_gloss.strip().replace('\n', ' ').replace('\r', ' ')
@@ -171,7 +227,7 @@ def process_dataset(json_file_path, videos_path, output_dir):
                     'gloss_id': video_info['gloss_id'],
                     'video_id': video_info['video_id'],
                     'predicted_gloss': predicted_gloss,
-                    'video_fps': video_fps,
+                    'num_frames': num_frames,
                     'processing_time': processing_time
                 })
                 
@@ -197,7 +253,7 @@ def process_dataset(json_file_path, videos_path, output_dir):
                     'gloss_id': video_info['gloss_id'],
                     'video_id': video_info['video_id'],
                     'predicted_gloss': f"ERROR: {str(e)}",
-                    'video_fps': video_fps,
+                    'num_frames': 0,
                     'processing_time': 0
                 })
             
@@ -228,3 +284,4 @@ if __name__ == "__main__":
     print(f"Start date and time = {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
     process_dataset(json_file_path, videos_path, output_dir)
     print(f"End date and time = {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+

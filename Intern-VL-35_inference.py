@@ -1,5 +1,4 @@
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
-from qwen_vl_utils import process_vision_info
+from transformers import AutoTokenizer, AutoModelForImageTextToText, AutoProcessor
 import torch
 import os
 import json
@@ -7,33 +6,44 @@ import random
 import csv
 import re
 from datetime import datetime
+import numpy as np
+from PIL import Image
+from decord import VideoReader, cpu
+import gc
 
 # Configuration
-local_path = "models/Qwen2.5-VL-7B-Instruct"
-model_name = "Qwen/Qwen2.5-VL-7B-Instruct"
+local_path = "models/InternVL3_5-14B-HF"
+model_name = "OpenGVLab/InternVL3_5-14B-HF"
 logged_model_name = re.sub(r'^[\\/]*models[\\/]+', '', local_path)
 videos_path = "/auto/plzen4-ntis/projects/korpusy_cv/WLASL/WLASL300/test"
 json_file_path = "/auto/plzen4-ntis/projects/korpusy_cv/WLASL/WLASL300/WLASL_v0.3.json"
 output_dir = "output/"
-min_pixels = 256 * 40 * 40
-max_pixels = 1080 * 40 * 40
 
-# Load model and processor
-model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+# Load model, tokenizer and processor
+model = AutoModelForImageTextToText.from_pretrained(
     local_path,
-    torch_dtype=torch.bfloat16,
-    attn_implementation="flash_attention_2",
-    device_map="auto",
-)
+    dtype=torch.bfloat16,
+    low_cpu_mem_usage=True,
+    trust_remote_code=True,
+).eval().cuda()
 
-processor = AutoProcessor.from_pretrained(
-    model_name, min_pixels=min_pixels, max_pixels=max_pixels
-)
-
+tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+processor = AutoProcessor.from_pretrained(model_name, trust_remote_code=True)
 
 
-def predict_gloss(video_path, fps=4):
-    """Predict gloss from an ASL video using Qwen model."""
+def load_video_frames(video_path, num_frames=64):
+    """Load and sample video frames uniformly."""
+    vr = VideoReader(video_path, ctx=cpu(0))
+    total_frames = len(vr)
+    indices = np.linspace(0, total_frames - 1, num=min(num_frames, total_frames), dtype=int)
+    frames = [Image.fromarray(vr[int(idx)].asnumpy()) for idx in indices]
+    return frames
+
+
+def predict_gloss(video_path, fps=25):
+    """Predict gloss from an ASL video using InternVL model."""
+    
+    frames = load_video_frames(video_path, num_frames=64)
     
     system_content = (
         "You are an expert ASL (American Sign Language) gloss annotator. Your task is to watch ASL videos and predict the EXACT single English gloss that represents the sign being performed."
@@ -41,43 +51,39 @@ def predict_gloss(video_path, fps=4):
         "Do NOT output phrases like 'woman signing' or 'hand movements' or descriptions."
         "Examples of correct ASL glosses: BOOK, RUN, HAPPY, WATER, SCHOOL, COMPUTER, DANCE, etc."
     )
-    # Prepare messages with video and fps
-    messages = [
-        {"role": "system", "content": system_content},
-        {"role": "user", "content": [
-            {"type": "video", "video": f"file://{video_path}", "fps": fps},
-            {"type": "text", "text": "What is the ASL gloss for this sign? Output only the single English word or phrase."}
-        ]}
-    ]
-
-    # Apply chat template and process vision inputs
-    text = processor.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
-    image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True)
-
-    # Prepare model inputs
-    inputs = processor(
-        text=[text],
-        images=image_inputs,
-        videos=video_inputs,
-        padding=True,
-        return_tensors="pt",
-        **video_kwargs,  # Include video-specific kwargs
-    )
-    inputs = inputs.to("cuda")
-
-    # Generate response
-    generated_ids = model.generate(**inputs, max_new_tokens=2048, temperature=1)
-    # Trim prompt tokens and decode
+    question = "What is the ASL gloss for this sign? Output only the single English word or phrase."
+    
+    # Build message with image placeholders
+    image_content = [{"type": "image"} for _ in frames]
+    text_content = {"type": "text", "text": f"{system_content}\n{question}"}
+    messages = [{"role": "user", "content": image_content + [text_content]}]
+    
+    # Apply chat template
+    prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    
+    # Process inputs
+    inputs = processor(text=prompt, images=frames, return_tensors="pt").to("cuda")
+    
+    # Generate and decode
+    with torch.inference_mode():
+        generated_ids = model.generate(**inputs, max_new_tokens=512, temperature=0.1)
+    
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
     ]
-    output_text = processor.batch_decode(
+    output_text = tokenizer.batch_decode(
         generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
     )
-
-    return output_text[0] if output_text else ""
+    
+    result = output_text[0] if output_text else ""
+    
+    # Aggressive memory cleanup
+    del frames, inputs, generated_ids, generated_ids_trimmed, output_text
+    torch.cuda.empty_cache()
+    torch.cuda.synchronize()
+    gc.collect()
+    
+    return result
 
 def process_dataset(json_file_path, videos_path, output_dir):
     """Process a dataset of videos and save results to CSV and log files."""
@@ -152,10 +158,10 @@ def process_dataset(json_file_path, videos_path, output_dir):
             try:
                 print(f"Processing video {i+1}/{len(test_videos)}: {video_info['video_id']} - {video_info['ground_truth_gloss']}")
                 
-                # Use FPS from the video metadata, but cap it at reasonable value for processing
-                video_fps = min(video_info['fps'], 4)
+                # Use FPS from video metadata (WLASL videos are typically 25 FPS)
+                video_fps = video_info['fps']
                 
-                # Predict gloss using Qwen
+                # Predict gloss using InternVL
                 predicted_gloss = predict_gloss(video_info['video_path'], fps=video_fps)
                 
                 # Clean up the predicted gloss (remove extra whitespace, newlines, etc.)

@@ -1,4 +1,4 @@
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+from transformers import AutoModelForVision2Seq, AutoProcessor
 from qwen_vl_utils import process_vision_info
 import torch
 import os
@@ -9,8 +9,9 @@ import re
 from datetime import datetime
 
 # Configuration
-local_path = "models/Qwen2.5-VL-7B-Instruct"
-model_name = "Qwen/Qwen2.5-VL-7B-Instruct"
+# local_path = "models/Qwen3-VL-235B-A22B-Instruct"
+local_path = "models/Qwen3-VL-30B-A3B-Instruct"
+model_name = "Qwen/Qwen3-VL-30B-A3B-Instruct"
 logged_model_name = re.sub(r'^[\\/]*models[\\/]+', '', local_path)
 videos_path = "/auto/plzen4-ntis/projects/korpusy_cv/WLASL/WLASL300/test"
 json_file_path = "/auto/plzen4-ntis/projects/korpusy_cv/WLASL/WLASL300/WLASL_v0.3.json"
@@ -19,15 +20,16 @@ min_pixels = 256 * 40 * 40
 max_pixels = 1080 * 40 * 40
 
 # Load model and processor
-model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+model = AutoModelForVision2Seq.from_pretrained(
     local_path,
-    torch_dtype=torch.bfloat16,
+    dtype=torch.bfloat16,
     attn_implementation="flash_attention_2",
     device_map="auto",
+    trust_remote_code=True,
 )
 
 processor = AutoProcessor.from_pretrained(
-    model_name, min_pixels=min_pixels, max_pixels=max_pixels
+    model_name, min_pixels=min_pixels, max_pixels=max_pixels, trust_remote_code=True
 )
 
 
@@ -68,7 +70,7 @@ def predict_gloss(video_path, fps=4):
     inputs = inputs.to("cuda")
 
     # Generate response
-    generated_ids = model.generate(**inputs, max_new_tokens=2048, temperature=1)
+    generated_ids = model.generate(**inputs, max_new_tokens=512, temperature=0.1)
     # Trim prompt tokens and decode
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
@@ -153,7 +155,7 @@ def process_dataset(json_file_path, videos_path, output_dir):
                 print(f"Processing video {i+1}/{len(test_videos)}: {video_info['video_id']} - {video_info['ground_truth_gloss']}")
                 
                 # Use FPS from the video metadata, but cap it at reasonable value for processing
-                video_fps = min(video_info['fps'], 4)
+                video_fps = min(video_info['fps'], 25)
                 
                 # Predict gloss using Qwen
                 predicted_gloss = predict_gloss(video_info['video_path'], fps=video_fps)
