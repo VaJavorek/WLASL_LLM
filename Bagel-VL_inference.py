@@ -210,78 +210,78 @@ def predict_gloss(video_path, from_frames=True, cut_edges=False, fps=16, require
             # return result if result else ""
             # return result.split()[0].replace("*", "") if result else ""
             return result.split()[-1].replace("*", "") if result else ""
-        else:
-            messages = [
-                    {"role": "system", "content": system_content},
-                    {"role": "user", "content": [
-                        {"type": "video", "fps": fps},
-                        {"type": "text", "text": prompt},
-                        ]
-                    },
-                ]
-            text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    #     else:
+    #         messages = [
+    #                 {"role": "system", "content": system_content},
+    #                 {"role": "user", "content": [
+    #                     {"type": "video", "fps": fps},
+    #                     {"type": "text", "text": prompt},
+    #                     ]
+    #                 },
+    #             ]
+    #         text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         
-            inputs = processor(
-                text=text,
-                videos=frames,
-                # images=pil_images,
-                fps=fps, 
-                padding=True,
-                return_tensors="pt"
-            ).to(model.device)
+    #         inputs = processor(
+    #             text=text,
+    #             videos=frames,
+    #             # images=pil_images,
+    #             fps=fps, 
+    #             padding=True,
+    #             return_tensors="pt"
+    #         ).to(model.device)
         
-    # if model loads from file
-    if not from_frames:
-        messages = [
-            {"role": "system", "content": system_content},
-            {"role": "user", "content": [
-                {"type": "video", "video": f"file://{video_path}", "fps": fps},
-                {"type": "text", "text": prompt},
-                # {"type": "file", "file": open(glosses_csv, "rb")}
-            ]}
-        ]
+    # # if model loads from file
+    # if not from_frames:
+    #     messages = [
+    #         {"role": "system", "content": system_content},
+    #         {"role": "user", "content": [
+    #             {"type": "video", "video": f"file://{video_path}", "fps": fps},
+    #             {"type": "text", "text": prompt},
+    #             # {"type": "file", "file": open(glosses_csv, "rb")}
+    #         ]}
+    #     ]
         
-        # Apply chat template and process vision inputs
-        text = processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-        image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True) 
+    #     # Apply chat template and process vision inputs
+    #     text = processor.apply_chat_template(
+    #         messages, tokenize=False, add_generation_prompt=True
+    #     )
+    #     image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True) 
         
-        if "fps" in video_kwargs and isinstance(video_kwargs["fps"], list):
-            if len(video_kwargs["fps"]) == 1:
-                video_kwargs["fps"] = video_kwargs["fps"][0]
-            else:
-                raise ValueError(f"Unexpected multiple fps values: {video_kwargs['fps']}")
-        # print(len(video_inputs))
-        # print(video_inputs[0].shape, video_tensor.dtype, video_tensor.device)
-        # print(video_inputs[0].shape)
-        # Prepare model inputs
-        inputs = processor(
-            text=[text],
-            images=image_inputs,
-            videos=video_inputs,
-            padding=True,
-            return_tensors="pt",
-            **video_kwargs,  # Include video-specific kwargs
-        )
-        inputs = inputs.to("cuda")
+    #     if "fps" in video_kwargs and isinstance(video_kwargs["fps"], list):
+    #         if len(video_kwargs["fps"]) == 1:
+    #             video_kwargs["fps"] = video_kwargs["fps"][0]
+    #         else:
+    #             raise ValueError(f"Unexpected multiple fps values: {video_kwargs['fps']}")
+    #     # print(len(video_inputs))
+    #     # print(video_inputs[0].shape, video_tensor.dtype, video_tensor.device)
+    #     # print(video_inputs[0].shape)
+    #     # Prepare model inputs
+    #     inputs = processor(
+    #         text=[text],
+    #         images=image_inputs,
+    #         videos=video_inputs,
+    #         padding=True,
+    #         return_tensors="pt",
+    #         **video_kwargs,  # Include video-specific kwargs
+    #     )
+    #     inputs = inputs.to("cuda")
     
-    # Generate response
-    generated_ids = model.generate(**inputs, max_new_tokens=512, do_sample=False, temperature=0.1)
-    # generated_ids = model.generate(**inputs, max_new_tokens=2048, temperature=1)
-    # print(processor.batch_decode(generated_ids, skip_special_tokens=True))
-    # Trim prompt tokens and decode
-    generated_ids_trimmed = [
-        out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-    ]
-    output_text = processor.batch_decode(
-        generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-    )
-    print(output_text)
-    # print(output_text[0].split()[-1].replace("*", ""))
+    # # Generate response
+    # generated_ids = model.generate(**inputs, max_new_tokens=512, do_sample=False, temperature=0.1)
+    # # generated_ids = model.generate(**inputs, max_new_tokens=2048, temperature=1)
+    # # print(processor.batch_decode(generated_ids, skip_special_tokens=True))
+    # # Trim prompt tokens and decode
+    # generated_ids_trimmed = [
+    #     out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+    # ]
+    # output_text = processor.batch_decode(
+    #     generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+    # )
+    # print(output_text)
+    # # print(output_text[0].split()[-1].replace("*", ""))
 
-    # return output_text[0] if output_text else ""
-    return output_text[0].split()[-1].replace("*", "") if output_text else ""
+    # # return output_text[0] if output_text else ""
+    # return output_text[0].split()[-1].replace("*", "") if output_text else ""
 
 def process_dataset(json_file_path, videos_path, output_dir):
     """Process a dataset of videos and save results to CSV and log files."""
