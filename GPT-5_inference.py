@@ -174,6 +174,8 @@ def process_dataset(json_file_path, videos_path, output_dir, api_key, model_name
     random.seed(42)
     random.shuffle(test_videos)
     
+    # test_videos = test_videos[400:]
+    
     # Initialize CSV file
     with open(csv_file_path, 'w', newline='', encoding='utf-8') as csvfile:
         fieldnames = ['ground_truth_gloss', 'gloss_id', 'video_id', 'predicted_gloss', 'num_frames', 'processing_time']
@@ -203,6 +205,37 @@ def process_dataset(json_file_path, videos_path, output_dir, api_key, model_name
                 predicted_gloss = predicted_gloss.strip().replace('\n', ' ').replace('\r', ' ')
                 # Also remove multiple consecutive spaces
                 predicted_gloss = ' '.join(predicted_gloss.split())
+                
+                # Retry mechanism for empty responses
+                if predicted_gloss == "EMPTY_RESPONSE":
+                    retry_message = f"{datetime.now().isoformat()} - MODEL: {model_name} - RETRY - Video: {video_info['video_id']} - First attempt returned empty response, retrying...\n"
+                    with open(log_file_path, 'a', encoding='utf-8') as logfile:
+                        logfile.write(retry_message)
+                    print(f"  → First attempt returned empty response, retrying...")
+                    
+                    # Second attempt
+                    predicted_gloss = predict_gloss(
+                        client,
+                        video_info['video_path'],
+                        model_name=model_name,
+                        num_frames=num_frames,
+                        max_completion_tokens=max_completion_tokens
+                    )
+                    
+                    # Clean up the predicted gloss again
+                    predicted_gloss = predicted_gloss.strip().replace('\n', ' ').replace('\r', ' ')
+                    predicted_gloss = ' '.join(predicted_gloss.split())
+                    
+                    if predicted_gloss == "EMPTY_RESPONSE":
+                        retry_fail_message = f"{datetime.now().isoformat()} - MODEL: {model_name} - RETRY_FAILED - Video: {video_info['video_id']} - Second attempt also returned empty response\n"
+                        with open(log_file_path, 'a', encoding='utf-8') as logfile:
+                            logfile.write(retry_fail_message)
+                        print(f"  → Second attempt also returned empty response")
+                    else:
+                        retry_success_message = f"{datetime.now().isoformat()} - MODEL: {model_name} - RETRY_SUCCESS - Video: {video_info['video_id']} - Second attempt succeeded: {predicted_gloss}\n"
+                        with open(log_file_path, 'a', encoding='utf-8') as logfile:
+                            logfile.write(retry_success_message)
+                        print(f"  → Second attempt succeeded: '{predicted_gloss}'")
                 
                 processing_time = (datetime.now() - start_time).total_seconds()
                 
