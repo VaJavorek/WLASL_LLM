@@ -1,6 +1,5 @@
 import os
 import json
-import random
 import csv
 import argparse
 import time
@@ -10,9 +9,8 @@ from google import genai
 from google.genai import types
 
 # Configuration
-videos_path = "/auto/plzen4-ntis/projects/korpusy_cv/WLASL/WLASL300/test"
-json_file_path = "/auto/plzen4-ntis/projects/korpusy_cv/WLASL/WLASL300/WLASL_v0.3.json"
-output_dir = "output/"
+default_videos_path = "/auto/plzen4-ntis/projects/korpusy_cv/WLASL/WLASL300/test"
+default_output_dir = "output/"
 
 def extract_frames_from_video(video_path, num_frames=8):
     """Extract evenly spaced frames from a video for processing."""
@@ -108,8 +106,8 @@ def predict_gloss(client, video_path, model_name="gemini-2.0-flash", num_frames=
              return f"REFUSED: {str(e)}"
         raise e
 
-def process_dataset(json_file_path, videos_path, output_dir, api_key, model_name="gemini-2.0-flash", num_frames=8, max_output_tokens=4096):
-    """Process a dataset of videos and save results to CSV and log files."""
+def process_corrections(input_csv_path, videos_path, output_dir, api_key, model_name="gemini-2.0-flash", num_frames=8, max_output_tokens=4096):
+    """Process corrections for a dataset of videos and save results to CSV and log files."""
     
     # Initialize Gemini client
     client = genai.Client(api_key=api_key)
@@ -120,86 +118,81 @@ def process_dataset(json_file_path, videos_path, output_dir, api_key, model_name
     # Generate timestamp for unique filenames
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     safe_model_name = model_name.replace('/', '_').replace('\\', '_')
-    csv_file_path = os.path.join(output_dir, f"wlasl_predictions_{safe_model_name}_{timestamp}.csv")
-    log_file_path = os.path.join(output_dir, f"wlasl_processing_{safe_model_name}_{timestamp}.log")
+    output_csv_name = os.path.basename(input_csv_path).replace('.csv', f'_corrected_{timestamp}.csv')
+    output_csv_path = os.path.join(output_dir, output_csv_name)
+    log_file_path = os.path.join(output_dir, f"wlasl_correction_{safe_model_name}_{timestamp}.log")
     
-    # Load JSON data
-    print("Loading WLASL JSON data...")
-    with open(json_file_path, 'r') as f:
-        wlasl_data = json.load(f)
+    print(f"Reading input CSV: {input_csv_path}")
+    rows = []
+    with open(input_csv_path, 'r', newline='', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        fieldnames = reader.fieldnames
+        rows = list(reader)
     
-    print(f"Loaded {len(wlasl_data)} glosses from JSON")
+    print(f"Loaded {len(rows)} rows. Scanning for EMPTY_RESPONSE, RESOURCE_EXHAUSTED, and INTERNAL errors...")
     
-    # Collect all test videos with their metadata
-    test_videos = []
+    # Function to check if a row needs correction
+    def needs_correction(row):
+        val = row['predicted_gloss']
+        return (val == 'EMPTY_RESPONSE' or 
+                'RESOURCE_EXHAUSTED' in val or 
+                'INTERNAL' in val or 
+                val.startswith('ERROR:'))
+
+    error_rows = [row for row in rows if needs_correction(row)]
+    print(f"Found {len(error_rows)} rows to correct.")
     
-    for gloss_idx, gloss_entry in enumerate(wlasl_data):
-        gloss_name = gloss_entry['gloss']
-        gloss_folder = str(gloss_idx)
-        gloss_folder_path = os.path.join(videos_path, gloss_folder)
-        
-        if not os.path.exists(gloss_folder_path):
-            continue
-            
-        for instance in gloss_entry['instances']:
-            if instance.get('split') == 'test':
-                video_id = instance['video_id']
-                video_filename = f"{video_id}.mp4"
-                video_path = os.path.join(gloss_folder_path, video_filename)
-                
-                if os.path.exists(video_path):
-                    test_videos.append({
-                        'video_path': video_path,
-                        'ground_truth_gloss': gloss_name,
-                        'gloss_id': gloss_idx,
-                        'video_id': video_id,
-                        'fps': instance.get('fps', 25)
-                    })
-    
-    print(f"Found {len(test_videos)} test videos to process")
-    
-    if len(test_videos) == 0:
-        print("No test videos found! Check the videos_path and JSON structure.")
+    if len(error_rows) == 0:
+        print("No corrections needed.")
         return
+
+    processed_count = 0
+    success_count = 0
+    still_error_count = 0
     
-    # Set random seed for reproducible order
-    random.seed(42)
-    random.shuffle(test_videos)
-    
-    # Initialize CSV file
-    with open(csv_file_path, 'w', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ['ground_truth_gloss', 'gloss_id', 'video_id', 'predicted_gloss', 'num_frames', 'processing_time']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        
-        processed_count = 0
-        errors_count = 0
-        
-        for i, video_info in enumerate(test_videos):
+    for i, row in enumerate(rows):
+        if needs_correction(row):
+            gloss_id = row['gloss_id']
+            video_id = row['video_id']
+            ground_truth = row['ground_truth_gloss']
+            
+            # Construct video path
+            # Assuming structure: videos_path/gloss_id/video_id.mp4
+            video_path = os.path.join(videos_path, str(gloss_id), f"{video_id}.mp4")
+            
+            if not os.path.exists(video_path):
+                print(f"Warning: Video not found at {video_path}")
+                log_msg = f"{datetime.now().isoformat()} - ERROR - Video not found: {video_path}\n"
+                with open(log_file_path, 'a', encoding='utf-8') as logfile:
+                    logfile.write(log_msg)
+                continue
+                
+            print(f"Correcting video {processed_count+1}/{len(error_rows)}: {video_id} - {ground_truth}")
+            processed_count += 1
+            
             start_time = datetime.now()
             predicted_gloss = "EMPTY_RESPONSE"
             
             try:
-                print(f"Processing video {i+1}/{len(test_videos)}: {video_info['video_id']} - {video_info['ground_truth_gloss']}")
-                
                 # First attempt
                 try:
                     predicted_gloss = predict_gloss(
                         client,
-                        video_info['video_path'],
+                        video_path,
                         model_name=model_name,
                         num_frames=num_frames,
                         max_output_tokens=max_output_tokens
                     )
                 except Exception as e:
                     predicted_gloss = f"ERROR: {str(e)}"
-                    # Re-raise if it's a resource or internal error to trigger retry logic below
+                    # We want to retry on specific errors, so suppress exception here to hit retry logic
                     if "RESOURCE_EXHAUSTED" in str(e) or "INTERNAL_ERROR" in str(e):
-                        pass 
+                         pass
                     else:
-                        raise e
-                
-                # Clean up predicted gloss if it's not an error
+                         # Log other errors but maybe don't crash the whole script
+                         pass
+
+                # Clean up
                 if not predicted_gloss.startswith("ERROR:") and predicted_gloss != "EMPTY_RESPONSE":
                     predicted_gloss = predicted_gloss.strip().replace('\n', ' ').replace('\r', ' ')
                     predicted_gloss = ' '.join(predicted_gloss.split())
@@ -221,9 +214,14 @@ def process_dataset(json_file_path, videos_path, output_dir, api_key, model_name
                     retry_reason = "INTERNAL_ERROR"
                     print("  → Internal error, sleeping for 2 seconds...")
                     time.sleep(2)
+                elif predicted_gloss.startswith("ERROR:"):
+                    # Could retry other errors too, but let's stick to these for now or treat all ERRORs as retriable?
+                    # The prompt asked to generalize retry for errors. Let's retry all errors once.
+                    should_retry = True
+                    retry_reason = "ERROR"
                 
                 if should_retry:
-                    retry_message = f"{datetime.now().isoformat()} - MODEL: {model_name} - RETRY ({retry_reason}) - Video: {video_info['video_id']} - First attempt failed, retrying...\n"
+                    retry_message = f"{datetime.now().isoformat()} - MODEL: {model_name} - RETRY ({retry_reason}) - Video: {video_id} - First attempt failed, retrying...\n"
                     with open(log_file_path, 'a', encoding='utf-8') as logfile:
                         logfile.write(retry_message)
                     print(f"  → First attempt failed ({retry_reason}), retrying...")
@@ -232,13 +230,12 @@ def process_dataset(json_file_path, videos_path, output_dir, api_key, model_name
                     try:
                         predicted_gloss = predict_gloss(
                             client,
-                            video_info['video_path'],
+                            video_path,
                             model_name=model_name,
                             num_frames=num_frames,
                             max_output_tokens=max_output_tokens
                         )
                         
-                        # Clean up predicted gloss
                         if predicted_gloss != "EMPTY_RESPONSE":
                             predicted_gloss = predicted_gloss.strip().replace('\n', ' ').replace('\r', ' ')
                             predicted_gloss = ' '.join(predicted_gloss.split())
@@ -246,108 +243,77 @@ def process_dataset(json_file_path, videos_path, output_dir, api_key, model_name
                     except Exception as e:
                         predicted_gloss = f"ERROR: {str(e)}"
                     
-                    # Check second attempt result
-                    fail_reason = ""
-                    if predicted_gloss == "EMPTY_RESPONSE":
-                        fail_reason = "EMPTY_RESPONSE"
-                    elif "RESOURCE_EXHAUSTED" in predicted_gloss:
-                        fail_reason = "RESOURCE_EXHAUSTED"
-                    elif "INTERNAL_ERROR" in predicted_gloss:
-                        fail_reason = "INTERNAL_ERROR"
-                    elif predicted_gloss.startswith("ERROR:"):
-                        fail_reason = predicted_gloss
-                        
-                    if fail_reason:
-                        retry_fail_message = f"{datetime.now().isoformat()} - MODEL: {model_name} - RETRY_FAILED - Video: {video_info['video_id']} - Second attempt failed: {fail_reason}\n"
+                    # Check result
+                    if needs_correction({'predicted_gloss': predicted_gloss}):
+                        fail_msg = f"{datetime.now().isoformat()} - MODEL: {model_name} - RETRY_FAILED - Video: {video_id} - Second attempt failed: {predicted_gloss}\n"
                         with open(log_file_path, 'a', encoding='utf-8') as logfile:
-                            logfile.write(retry_fail_message)
-                        print(f"  → Second attempt failed: {fail_reason}")
+                            logfile.write(fail_msg)
+                        print(f"  → Second attempt failed: {predicted_gloss}")
+                        still_error_count += 1
                     else:
-                        retry_success_message = f"{datetime.now().isoformat()} - MODEL: {model_name} - RETRY_SUCCESS - Video: {video_info['video_id']} - Second attempt succeeded: {predicted_gloss}\n"
+                        success_msg = f"{datetime.now().isoformat()} - MODEL: {model_name} - RETRY_SUCCESS - Video: {video_id} - Second attempt succeeded: {predicted_gloss}\n"
                         with open(log_file_path, 'a', encoding='utf-8') as logfile:
-                            logfile.write(retry_success_message)
+                            logfile.write(success_msg)
                         print(f"  → Second attempt succeeded: '{predicted_gloss}'")
-                
-                processing_time = (datetime.now() - start_time).total_seconds()
-                
-                writer.writerow({
-                    'ground_truth_gloss': video_info['ground_truth_gloss'],
-                    'gloss_id': video_info['gloss_id'],
-                    'video_id': video_info['video_id'],
-                    'predicted_gloss': predicted_gloss,
-                    'num_frames': num_frames,
-                    'processing_time': processing_time
-                })
-                
-                log_status = "SUCCESS" if not predicted_gloss.startswith("ERROR:") and predicted_gloss != "EMPTY_RESPONSE" else "ERROR"
-                log_message = f"{datetime.now().isoformat()} - MODEL: {model_name} - {log_status} - Video: {video_info['video_id']} - GT: {video_info['ground_truth_gloss']} - Predicted: {predicted_gloss} - Time: {processing_time:.2f}s\n"
-                with open(log_file_path, 'a', encoding='utf-8') as logfile:
-                    logfile.write(log_message)
-                
-                if log_status == "SUCCESS":
-                    processed_count += 1
-                    print(f"  → Predicted: '{predicted_gloss}' (took {processing_time:.2f}s)")
+                        success_count += 1
                 else:
-                    errors_count += 1
-                    print(f"  → Finished with error/empty: {predicted_gloss} (took {processing_time:.2f}s)")
+                    # First attempt succeeded
+                    success_msg = f"{datetime.now().isoformat()} - MODEL: {model_name} - SUCCESS - Video: {video_id} - Correction succeeded: {predicted_gloss}\n"
+                    with open(log_file_path, 'a', encoding='utf-8') as logfile:
+                        logfile.write(success_msg)
+                    print(f"  → Correction succeeded: '{predicted_gloss}'")
+                    success_count += 1
+                
+                # Update row
+                processing_time = (datetime.now() - start_time).total_seconds()
+                row['predicted_gloss'] = predicted_gloss
+                row['processing_time'] = processing_time
                 
             except Exception as e:
-                # Catch-all for any other unexpected errors
-                processing_time = (datetime.now() - start_time).total_seconds()
-                error_message = f"{datetime.now().isoformat()} - MODEL: {model_name} - CRITICAL_ERROR - Video: {video_info['video_id']} - GT: {video_info['ground_truth_gloss']} - Error: {str(e)}\n"
+                error_msg = f"{datetime.now().isoformat()} - MODEL: {model_name} - CRITICAL_ERROR - Video: {video_id} - Error during correction: {str(e)}\n"
                 with open(log_file_path, 'a', encoding='utf-8') as logfile:
-                    logfile.write(error_message)
-                
+                    logfile.write(error_msg)
                 print(f"  → CRITICAL ERROR: {str(e)}")
-                errors_count += 1
-                
-                writer.writerow({
-                    'ground_truth_gloss': video_info['ground_truth_gloss'],
-                    'gloss_id': video_info['gloss_id'],
-                    'video_id': video_info['video_id'],
-                    'predicted_gloss': f"CRITICAL_ERROR: {str(e)}",
-                    'num_frames': num_frames,
-                    'processing_time': processing_time
-                })
-            
-            if (i + 1) % 10 == 0:
-                csvfile.flush()
-                print(f"Progress: {i+1}/{len(test_videos)} videos processed")
-    
-    summary_message = f"""
-=== PROCESSING COMPLETE ===
-Model: {model_name}
-Total videos: {len(test_videos)}
-Successfully processed: {processed_count}
-Errors: {errors_count}
-CSV output: {csv_file_path}
-Log output: {log_file_path}
+                still_error_count += 1
+                row['predicted_gloss'] = f"CRITICAL_ERROR: {str(e)}"
+
+    # Write final CSV
+    print(f"Writing corrected CSV to: {output_csv_path}")
+    with open(output_csv_path, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    summary = f"""
+=== CORRECTION COMPLETE ===
+Total rows checked: {len(rows)}
+Errors found: {len(error_rows)}
+Successfully corrected: {success_count}
+Still errors: {still_error_count}
+Output file: {output_csv_path}
     """
-    
-    print(summary_message)
-    
+    print(summary)
     with open(log_file_path, 'a', encoding='utf-8') as logfile:
-        logfile.write(f"\n{datetime.now().isoformat()} - SUMMARY:\n{summary_message}\n")
+        logfile.write(summary)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='ASL Gloss Prediction using Google Gemini API')
+    parser = argparse.ArgumentParser(description='Correct ASL Gloss Predictions (EMPTY/ERRORS) using Gemini API')
     parser.add_argument('--api-key', type=str, required=True, help='Google GenAI API key')
+    parser.add_argument('--input-csv', type=str, required=True, help='Path to input CSV file with errors')
     parser.add_argument('--model', type=str, default='gemini-2.5-flash', help='Model name to use (default: gemini-2.5-flash)')
     parser.add_argument('--num-frames', type=int, default=8, help='Number of frames to extract from each video (default: 8)')
     parser.add_argument('--max-output-tokens', type=int, default=4096, help='Maximum output tokens (default: 4096)')
-    parser.add_argument('--videos-path', type=str, default=videos_path, help='Path to videos directory')
-    parser.add_argument('--json-path', type=str, default=json_file_path, help='Path to WLASL JSON file')
-    parser.add_argument('--output-dir', type=str, default=output_dir, help='Output directory for results')
+    parser.add_argument('--videos-path', type=str, default=default_videos_path, help='Path to videos directory')
+    parser.add_argument('--output-dir', type=str, default=default_output_dir, help='Output directory for results')
     
     args = parser.parse_args()
     
-    print(f"Start date and time = {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+    print(f"Start correction = {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+    print(f"Input CSV: {args.input_csv}")
     print(f"Model: {args.model}")
-    print(f"Frames per video: {args.num_frames}")
-    print(f"Max output tokens: {args.max_output_tokens}")
     
-    process_dataset(
-        args.json_path,
+    process_corrections(
+        args.input_csv,
         args.videos_path,
         args.output_dir,
         args.api_key,
@@ -356,4 +322,5 @@ if __name__ == "__main__":
         max_output_tokens=args.max_output_tokens
     )
     
-    print(f"End date and time = {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+    print(f"End correction = {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+
