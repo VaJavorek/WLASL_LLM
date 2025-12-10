@@ -15,6 +15,10 @@ pip install qwen-vl-utils
 pip install qwen-omni-utils
 pip install flash-attn --no-build-isolation
 pip install decord
+```
 
+### For frontier models also add:
+```bash
 pip install google-genai
+pip install openai
 ```
