@@ -1,6 +1,6 @@
 # WLASL_LLM
 
-Repository accompanying the conference paper [**Sign Language Recognition in the Age of LLMs**](https://example.com/sign-language-recognition-age-of-llms) *(placeholder link; the public paper link will be added after release)*.
+Repository accompanying the paper [**Sign Language Recognition in the Age of LLMs**](https://arxiv.org/abs/2604.11225).
 
 The repository has two main goals:
 
@@ -75,6 +75,4 @@ The focus of the repository is zero-shot isolated sign language recognition with
 
 ## Paper
 
-Paper: [**Sign Language Recognition in the Age of LLMs**](https://example.com/sign-language-recognition-age-of-llms)
-
-The placeholder link above will be replaced once the paper is publicly available.
+Paper: [**Sign Language Recognition in the Age of LLMs**](https://arxiv.org/abs/2604.11225)
