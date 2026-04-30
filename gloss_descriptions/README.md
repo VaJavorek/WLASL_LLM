@@ -11,7 +11,10 @@ The model compares these descriptions with the video in the input and decides if
 
 The script has pipeline for Qwen3-VL and for Gemini api.
 
-The settings for experiments with nonskeptical, skeptical and no description scenarios for Qwen3-VL are showed in the following scripts. \
-nonskeptical: gloss_descriptions_qwen_nonskept.py \
-skeptical: gloss_descriptions_qwen_skept.py \
-no description: gloss_descriptions_qwen_nodesc.py
+The settings for experiments with nonskeptical, skeptical and no description scenarios for Qwen3-VL are showed in the following scripts. 
+
+| Path | Purpose |
+| --- | --- |
+| `gloss_descriptions_qwen_nonskept.py` | Skeptical scenario with descriptions |
+| `gloss_descriptions_qwen_skept.py` | Non skeptical scenario with descriptions |
+| `gloss_descriptions_qwen_nodesc.py`| Scenario without descriptions |
